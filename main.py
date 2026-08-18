@@ -122,32 +122,18 @@ async def handle_chat_webhook(request: Request):
         print(f"--> Search Customer Error: {e}")
 
     # 4. Nếu là Khách MỚI (chưa có đơn nào) -> Gọi API Haravan tạo đơn 0đ
-    # Chuẩn hóa tên tiếng Việt theo cơ chế Haravan:
-    # - first_name = Tên gọi (từ cuối cùng, VD: "Thuận")
-    # - last_name = Họ & Tên đệm (các từ đầu, VD: "Nguyễn Thành")
-    # Khi Haravan render danh sách đơn hàng sẽ hiển thị đúng chuẩn: "Nguyễn Thành Thuận"
-    name_parts = customer_name.strip().split()
-    if len(name_parts) >= 2:
-        fn = name_parts[-1]
-        ln = " ".join(name_parts[:-1])
-    elif len(name_parts) == 1:
-        fn = name_parts[0]
-        ln = "Khách"
-    else:
-        fn = "Lead"
-        ln = "Khách Hàng"
-
+    # Lấy thẳng tên người gửi từ Facebook/Zalo dán trực tiếp qua Haravan (nguyên văn 100%)
     customer_payload = {
-        "first_name": fn,
-        "last_name": ln,
+        "first_name": customer_name,
+        "last_name": "",
         "phone": phone_number
     }
     if customer_id:
         customer_payload["id"] = customer_id
 
     address_payload = {
-        "first_name": fn,
-        "last_name": ln,
+        "first_name": customer_name,
+        "last_name": "",
         "phone": phone_number,
         "address1": "Vietnam",
         "country": "Vietnam",
@@ -182,4 +168,5 @@ async def handle_chat_webhook(request: Request):
     response = requests.post(HARAVAN_API_URL, json=payload, headers=headers, timeout=10)
     print(f"--> Haravan Create Order Status: {response.status_code}, Res: {response.text[:200]}")
     return {"status": "success", "haravan_res": response.json()}
+
 
