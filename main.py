@@ -118,16 +118,25 @@ async def handle_chat_webhook(request: Request):
         print(f"--> Search Customer Error: {e}")
 
     # 4. Nếu là Khách MỚI (chưa có đơn nào) -> Gọi API Haravan tạo đơn 0đ
+    # Tách tên thành first_name + last_name để Haravan bind khách hàng chuẩn xác
+    # (Haravan yêu cầu last_name để tạo customer profile đúng - nếu chỉ có first_name sẽ bị đẩy vào guest account)
+    name_parts = customer_name.strip().split()
+    fn = name_parts[0] if name_parts else "Khách"
+    ln = " ".join(name_parts[1:]) if len(name_parts) > 1 else "Hàng Lead"
+
     customer_payload = {
-        "first_name": customer_name,
+        "first_name": fn,
+        "last_name": ln,
         "phone": phone_number
     }
     if customer_id:
         customer_payload["id"] = customer_id
 
     address_payload = {
-        "first_name": customer_name,
+        "first_name": fn,
+        "last_name": ln,
         "phone": phone_number,
+        "address1": "Vietnam",
         "country": "Vietnam",
         "country_code": "VN"
     }
