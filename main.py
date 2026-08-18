@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import time
@@ -7,7 +8,16 @@ from fastapi import FastAPI, Request, Response
 
 app = FastAPI(title="Haravan Auto Order Bot (Strict Carrier Filter & Deduplication)")
 
-HARAVAN_ACCESS_TOKEN = "9E46B03CCB4575943B4B59AD159C6566E70A16F76423E8D6281CD1ADFC9348E9"
+# Token đọc từ biến môi trường - KHÔNG hardcode vào source (repo này là public trên GitHub).
+# Đặt biến này trong Render Dashboard -> Environment -> Add Environment Variable.
+HARAVAN_ACCESS_TOKEN = os.getenv("HARAVAN_ACCESS_TOKEN", "").strip()
+if not HARAVAN_ACCESS_TOKEN:
+    raise RuntimeError(
+        "Thiếu biến môi trường HARAVAN_ACCESS_TOKEN. "
+        "Vào Render Dashboard -> Service -> Environment, thêm HARAVAN_ACCESS_TOKEN = <token Haravan mới>, "
+        "rồi deploy lại. Chạy ở máy: set HARAVAN_ACCESS_TOKEN trước khi chạy uvicorn."
+    )
+
 HARAVAN_API_URL = "https://apis.haravan.com/com/orders.json"
 HARAVAN_SEARCH_CUSTOMER_URL = "https://apis.haravan.com/com/customers/search.json"
 
