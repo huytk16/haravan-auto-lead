@@ -73,15 +73,19 @@ async def handle_chat_webhook(request: Request):
             "phone": phone_number
         }
 
-    # 2. Tìm Tên khách hàng thông minh từ payload
+    # 2. Tìm Tên khách hàng thông minh từ payload webhook HaraSocial
     customer_name = "Khách hàng Lead"
     if isinstance(data, dict):
         if "first_name" in data or "last_name" in data:
-            fn = data.get("first_name", "") or ""
-            ln = data.get("last_name", "") or ""
-            customer_name = f"{fn} {ln}".strip() or "Khách hàng Lead"
+            fn_raw = data.get("first_name", "") or ""
+            ln_raw = data.get("last_name", "") or ""
+            customer_name = f"{ln_raw} {fn_raw}".strip() or f"{fn_raw} {ln_raw}".strip() or "Khách hàng Lead"
         elif "sender" in data and isinstance(data["sender"], dict):
             customer_name = data["sender"].get("name", "Khách hàng Lead")
+        elif "customer" in data and isinstance(data["customer"], dict):
+            customer_name = data["customer"].get("name", "Khách hàng Lead")
+        elif "sender_name" in data and isinstance(data["sender_name"], str):
+            customer_name = data["sender_name"]
         elif "name" in data and isinstance(data["name"], str):
             customer_name = data["name"]
 
@@ -118,11 +122,20 @@ async def handle_chat_webhook(request: Request):
         print(f"--> Search Customer Error: {e}")
 
     # 4. Nếu là Khách MỚI (chưa có đơn nào) -> Gọi API Haravan tạo đơn 0đ
-    # Tách tên thành first_name + last_name để Haravan bind khách hàng chuẩn xác
-    # (Haravan yêu cầu last_name để tạo customer profile đúng - nếu chỉ có first_name sẽ bị đẩy vào guest account)
+    # Chuẩn hóa tên tiếng Việt theo cơ chế Haravan:
+    # - first_name = Tên gọi (từ cuối cùng, VD: "Thuận")
+    # - last_name = Họ & Tên đệm (các từ đầu, VD: "Nguyễn Thành")
+    # Khi Haravan render danh sách đơn hàng sẽ hiển thị đúng chuẩn: "Nguyễn Thành Thuận"
     name_parts = customer_name.strip().split()
-    fn = name_parts[0] if name_parts else "Khách"
-    ln = " ".join(name_parts[1:]) if len(name_parts) > 1 else "Hàng Lead"
+    if len(name_parts) >= 2:
+        fn = name_parts[-1]
+        ln = " ".join(name_parts[:-1])
+    elif len(name_parts) == 1:
+        fn = name_parts[0]
+        ln = "Khách"
+    else:
+        fn = "Lead"
+        ln = "Khách Hàng"
 
     customer_payload = {
         "first_name": fn,
@@ -141,8 +154,11 @@ async def handle_chat_webhook(request: Request):
         "country_code": "VN"
     }
 
+    # Đơn hàng chuẩn với Kênh (Channel) là 'harasocial'
     payload = {
         "order": {
+            "source_name": "harasocial",
+            "source": "harasocial",
             "phone": phone_number,
             "financial_status": "pending",
             "fulfillment_status": "unfulfilled",
