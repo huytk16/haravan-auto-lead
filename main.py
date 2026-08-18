@@ -3,22 +3,21 @@ import json
 import requests
 from fastapi import FastAPI, Request, Response
 
-app = FastAPI(title="Haravan Auto Order Bot (Bulletproof)")
+app = FastAPI(title="Haravan Auto Order Bot (Strict Carrier Filter)")
 
 HARAVAN_ACCESS_TOKEN = "9E46B03CCB4575943B4B59AD159C6566E70A16F76423E8D6281CD1ADFC9348E9"
 HARAVAN_API_URL = "https://apis.haravan.com/com/orders.json"
 HARAVAN_SEARCH_CUSTOMER_URL = "https://apis.haravan.com/com/customers/search.json"
 
-# Regex nhận diện SĐT Việt Nam (10 chữ số)
-PHONE_REGEX = r"(?:\+?84|0)\d{9}\b"
+# Regex siết chặt chỉ bắt đúng đầu số Nhà mạng Viettel, Vina, Mobi, Vietnamobile, Gmobile
+STRICT_VN_PHONE_REGEX = r"(?:\+?84|0)(?:3[2-9]|5[25689]|7[06-9]|8[1-9]|9[0-9])\d{7}\b"
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "Haravan Auto Lead Bot (Bulletproof Multi-Format) is running!"}
+    return {"status": "online", "message": "Haravan Auto Lead Bot with Strict Carrier Validation is running!"}
 
 @app.get("/webhook/harasocial")
 async def verify_webhook(request: Request):
-    # Hỗ trợ Facebook / HaraSocial Webhook verification GET request
     params = request.query_params
     challenge = params.get("hub.challenge")
     if challenge:
@@ -34,16 +33,16 @@ async def handle_chat_webhook(request: Request):
     
     print(">>> Webhook Payload Received:", json.dumps(data, ensure_ascii=False))
     
-    # 1. Trích xuất toàn bộ chuỗi SĐT bằng Regex từ mọi cấu trúc Webhook
+    # 1. Trích xuất SĐT chuẩn nhà mạng Việt Nam bằng Regex
     raw_str = json.dumps(data, ensure_ascii=False)
-    matches = re.findall(PHONE_REGEX, raw_str)
+    matches = re.findall(STRICT_VN_PHONE_REGEX, raw_str)
     
     if not matches:
-        print("--> No phone number detected in payload")
-        return {"status": "no_phone_detected"}
+        print("--> No valid VN mobile phone number detected in payload")
+        return {"status": "no_valid_vn_phone_detected"}
         
     phone_number = matches[0]
-    print(f"--> Extracted Phone Number: {phone_number}")
+    print(f"--> Valid VN Mobile Phone Detected: {phone_number}")
 
     # 2. Tìm Tên khách hàng thông minh từ payload
     customer_name = "Khách hàng Lead"
@@ -93,7 +92,7 @@ async def handle_chat_webhook(request: Request):
             "send_receipt": False,
             "send_fulfillment_receipt": False,
             "tags": "DonAo_0d, Auto_Bot",
-            "note": f"Đơn ảo tự động tạo khi khách MỚI ({customer_name}) nhả SĐT từ HaraSocial",
+            "note": f"Đơn ảo tự động tạo khi khách MỚI ({customer_name}) nhả SĐT hợp lệ từ HaraSocial",
             "line_items": [
                 {
                     "title": "Mua Hàng Shopee Indo",
