@@ -94,8 +94,8 @@ async def handle_chat_webhook(request: Request):
         "Content-Type": "application/json"
     }
 
-    # 3. KIỂM TRA THÔNG MINH: Tra cứu xem Khách hàng này đã từng có đơn chưa trên Haravan
-    customer_id = None
+    # 3. KIỂM TRA KHÁCH HÀNG: Chỉ tạo đơn cho KHÁCH MỚI 100% (chưa từng có SĐT trong Haravan)
+    # Bỏ qua toàn bộ khách cũ đã tồn tại SĐT trong danh bạ Haravan (kể cả chưa từng tạo đơn hay đã có đơn)
     try:
         search_res = requests.get(
             f"{HARAVAN_SEARCH_CUSTOMER_URL}?query={phone_number}",
@@ -106,30 +106,27 @@ async def handle_chat_webhook(request: Request):
             customers = search_res.json().get("customers", [])
             if customers and len(customers) > 0:
                 c = customers[0]
-                customer_id = c.get("id")
-                orders_count = c.get("orders_count", 0)
-                last_order_id = c.get("last_order_id")
-                
-                if orders_count > 0 or last_order_id is not None:
-                    print(f"--> Skipped: Customer {phone_number} already has orders (count={orders_count}, last_order={last_order_id})")
-                    return {
-                        "status": "skipped",
-                        "reason": f"Khách hàng {phone_number} đã từng có {orders_count} đơn hàng.",
-                        "phone": phone_number,
-                        "orders_count": orders_count
-                    }
+                cust_id = c.get("id")
+                cust_name = f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+                orders_cnt = c.get("orders_count", 0)
+                print(f"--> Skipped: Customer {phone_number} already exists in Haravan (ID={cust_id}, Name='{cust_name}', Orders={orders_cnt})")
+                return {
+                    "status": "skipped",
+                    "reason": f"Khách hàng {phone_number} ({cust_name}) đã tồn tại trong hệ thống Haravan từ trước (Khách cũ).",
+                    "phone": phone_number,
+                    "customer_id": cust_id,
+                    "orders_count": orders_cnt
+                }
     except Exception as e:
         print(f"--> Search Customer Error: {e}")
 
-    # 4. Nếu là Khách MỚI (chưa có đơn nào) -> Gọi API Haravan tạo đơn 0đ
+    # 4. Nếu là Khách MỚI 100% (chưa từng có trong Haravan) -> Gọi API Haravan tạo đơn 0đ
     # Lấy thẳng tên người gửi từ Facebook/Zalo dán trực tiếp qua Haravan (nguyên văn 100%)
     customer_payload = {
         "first_name": customer_name,
         "last_name": "",
         "phone": phone_number
     }
-    if customer_id:
-        customer_payload["id"] = customer_id
 
     address_payload = {
         "first_name": customer_name,
