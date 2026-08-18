@@ -19,6 +19,116 @@ PROCESSED_PHONES = {}  # phone_number -> timestamp
 CACHE_LOCK = Lock()
 CACHE_TTL_SECONDS = 600  # Khóa chống lặp 10 phút
 
+# Sản phẩm 0đ ĐÃ TẠO SẴN trên Haravan (bắt buộc điền để Haravan ghi nhận đúng đơn)
+# Lấy ID tại: Haravan Admin -> Sản phẩm -> mở sản phẩm 0đ -> đọc số trên thanh URL
+ZERO_VND_PRODUCT_ID = 1065265386   # product_id của sản phẩm "Mua Hàng Shopee Indo" (0đ)
+ZERO_VND_VARIANT_ID = 1148799234   # variant_id (phiên bản) của sản phẩm "Mua Hàng Shopee Indo" (0đ)
+ZERO_VND_FALLBACK_TITLE = "Mua Hàng Shopee Indo"  # chỉ dùng khi chưa điền ID ở trên
+
+# ---- Bước 3: bóc tên khách đúng như hiển thị trên Facebook/Zalo ----
+# Điểm ưu tiên theo tên key: key chứa nguyên văn tên hiển thị được ưu tiên cao nhất,
+# first_name/last_name xếp cuối vì phải tự ghép nên dễ sai thứ tự.
+NAME_KEY_SCORES = {
+    "customer_name": 100,
+    "sender_name": 98,
+    "from_name": 96,
+    "full_name": 94,
+    "fullname": 94,
+    "display_name": 92,
+    "displayname": 92,
+    "profile_name": 90,
+    "contact_name": 88,
+    "name": 80,
+    "username": 62,
+    "user_name": 62,
+    "nickname": 55,
+    "nick_name": 55,
+    "first_name": 40,
+    "last_name": 38,
+}
+
+# Tên đang nằm trong khối dữ liệu của người gửi thì đáng tin hơn (vd sender.name)
+NAME_CONTAINER_HINTS = (
+    "sender", "from", "customer", "contact", "user", "profile",
+    "client", "author", "participant", "lead", "guest_info"
+)
+
+# Giá trị rác hay gặp, không phải tên thật
+JUNK_NAMES = {
+    "", "null", "none", "n/a", "na", "unknown", "undefined", "guest", "user",
+    "anonymous", "facebook user", "zalo user", "khach", "khách", "khách hàng",
+    "khách hàng lead", "no name", "test",
+}
+
+DEFAULT_CUSTOMER_NAME = "Khách hàng Lead"
+
+
+def _looks_like_real_name(value) -> bool:
+    """Loại bỏ ID, SĐT, email, URL, chuỗi hash... chỉ giữ lại thứ trông giống tên người."""
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v or len(v) > 60:
+        return False
+    if v.lower() in JUNK_NAMES:
+        return False
+    if "@" in v or "://" in v:
+        return False
+    if re.fullmatch(r"[\d\s+()\-.]+", v):        # toàn số: SĐT hoặc ID
+        return False
+    if re.fullmatch(r"[0-9a-fA-F\-_]{16,}", v):  # uuid / hash / token
+        return False
+    if not re.search(r"[A-Za-zÀ-ỹ]", v):         # phải có ít nhất một chữ cái
+        return False
+    return True
+
+
+def extract_customer_name(data) -> str:
+    """Duyệt đệ quy toàn bộ payload, chấm điểm mọi ứng viên tên rồi chọn tên điểm cao nhất.
+
+    Nhờ vậy handler chạy đúng với mọi format payload của HaraSocial mà không cần
+    biết trước cấu trúc JSON.
+    """
+    candidates = []  # (score, thứ tự gặp, tên)
+
+    def add(score: int, value: str):
+        candidates.append((score, len(candidates), value.strip()))
+
+    def score_of(key: str, container_key: str) -> int:
+        base = NAME_KEY_SCORES.get(key, 0)
+        if any(hint in container_key for hint in NAME_CONTAINER_HINTS):
+            base += 20
+        return base
+
+    def walk(node, container_key: str = ""):
+        if isinstance(node, dict):
+            # Ghép Họ Đệm + Tên theo đúng thứ tự người Việt (Facebook tách sẵn kiểu này)
+            fn = node.get("first_name")
+            ln = node.get("last_name")
+            if isinstance(fn, str) or isinstance(ln, str):
+                joined = f"{(ln or '').strip()} {(fn or '').strip()}".strip()
+                if _looks_like_real_name(joined):
+                    add(score_of("full_name", container_key) - 5, joined)
+
+            for k, v in node.items():
+                kl = str(k).lower()
+                if isinstance(v, str):
+                    if kl in NAME_KEY_SCORES and _looks_like_real_name(v):
+                        add(score_of(kl, container_key), v)
+                else:
+                    walk(v, kl)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item, container_key)
+
+    walk(data)
+    if not candidates:
+        return DEFAULT_CUSTOMER_NAME
+
+    # Điểm cao nhất thắng; cùng điểm thì lấy cái gặp trước
+    best = max(candidates, key=lambda c: (c[0], -c[1]))
+    return best[2]
+
 def is_duplicate_and_lock(phone: str) -> bool:
     now = time.time()
     with CACHE_LOCK:
@@ -73,21 +183,9 @@ async def handle_chat_webhook(request: Request):
             "phone": phone_number
         }
 
-    # 2. Tìm Tên khách hàng thông minh từ payload webhook HaraSocial
-    customer_name = "Khách hàng Lead"
-    if isinstance(data, dict):
-        if "first_name" in data or "last_name" in data:
-            fn_raw = data.get("first_name", "") or ""
-            ln_raw = data.get("last_name", "") or ""
-            customer_name = f"{ln_raw} {fn_raw}".strip() or f"{fn_raw} {ln_raw}".strip() or "Khách hàng Lead"
-        elif "sender" in data and isinstance(data["sender"], dict):
-            customer_name = data["sender"].get("name", "Khách hàng Lead")
-        elif "customer" in data and isinstance(data["customer"], dict):
-            customer_name = data["customer"].get("name", "Khách hàng Lead")
-        elif "sender_name" in data and isinstance(data["sender_name"], str):
-            customer_name = data["sender_name"]
-        elif "name" in data and isinstance(data["name"], str):
-            customer_name = data["name"]
+    # 2. Bóc tên khách đúng như hiển thị trên Facebook/Zalo (quét sâu toàn payload)
+    customer_name = extract_customer_name(data)
+    print(f"--> Customer Name Detected: {customer_name}")
 
     headers = {
         "Authorization": f"Bearer {HARAVAN_ACCESS_TOKEN}",
@@ -137,6 +235,23 @@ async def handle_chat_webhook(request: Request):
         "country_code": "VN"
     }
 
+    # Dòng sản phẩm: trỏ thẳng vào sản phẩm 0đ có sẵn trên Haravan để đơn được ghi nhận đúng
+    if ZERO_VND_VARIANT_ID:
+        line_item = {
+            "variant_id": ZERO_VND_VARIANT_ID,
+            "quantity": 1,
+            "price": 0
+        }
+        if ZERO_VND_PRODUCT_ID:
+            line_item["product_id"] = ZERO_VND_PRODUCT_ID
+    else:
+        print("--> WARNING: Chưa điền ZERO_VND_VARIANT_ID, đang tạo dòng hàng tự do (Haravan sẽ KHÔNG ghi nhận đúng sản phẩm)")
+        line_item = {
+            "title": ZERO_VND_FALLBACK_TITLE,
+            "price": 0,
+            "quantity": 1
+        }
+
     # Đơn hàng chuẩn với Kênh (Channel) là 'harasocial'
     payload = {
         "order": {
@@ -149,13 +264,7 @@ async def handle_chat_webhook(request: Request):
             "send_fulfillment_receipt": False,
             "tags": "DonAo_0d, Auto_Bot",
             "note": f"Đơn ảo tự động tạo khi khách MỚI ({customer_name}) nhả SĐT hợp lệ từ HaraSocial",
-            "line_items": [
-                {
-                    "title": "Mua Hàng Shopee Indo",
-                    "price": 0,
-                    "quantity": 1
-                }
-            ],
+            "line_items": [line_item],
             "customer": customer_payload,
             "billing_address": address_payload,
             "shipping_address": address_payload
