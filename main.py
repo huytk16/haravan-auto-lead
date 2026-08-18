@@ -2,17 +2,18 @@ import re
 import requests
 from fastapi import FastAPI, Request
 
-app = FastAPI(title="Haravan Auto Order Bot")
+app = FastAPI(title="Haravan Auto Order Bot (Smart Deduplication)")
 
 HARAVAN_ACCESS_TOKEN = "9E46B03CCB4575943B4B59AD159C6566E70A16F76423E8D6281CD1ADFC9348E9"
 HARAVAN_API_URL = "https://apis.haravan.com/com/orders.json"
+HARAVAN_SEARCH_CUSTOMER_URL = "https://apis.haravan.com/com/customers/search.json"
 
 # Regex nhận diện SĐT Việt Nam chuẩn
 PHONE_REGEX = r"(?:\+?84|0)(?:\d){9}\b"
 
 @app.get("/")
 def read_root():
-    return {"status": "online", "message": "Haravan Auto Lead Bot is running!"}
+    return {"status": "online", "message": "Haravan Auto Lead Bot with Smart Check is running!"}
 
 @app.post("/webhook/harasocial")
 async def handle_chat_webhook(request: Request):
@@ -33,7 +34,35 @@ async def handle_chat_webhook(request: Request):
     if match:
         phone_number = match.group(0)
         
-        # 3. Payload gửi API Haravan tạo đơn 0đ
+        headers = {
+            "Authorization": f"Bearer {HARAVAN_ACCESS_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        # 3. KIỂM TRA THÔNG MINH: Tra cứu xem Khách hàng này đã từng có đơn chưa
+        try:
+            search_res = requests.get(
+                f"{HARAVAN_SEARCH_CUSTOMER_URL}?query={phone_number}",
+                headers=headers,
+                timeout=5
+            )
+            if search_res.status_code == 200:
+                customers = search_res.json().get("customers", [])
+                if customers and len(customers) > 0:
+                    orders_count = customers[0].get("orders_count", 0)
+                    # Nếu khách đã có từ 1 đơn trở lên -> Bỏ qua không tạo thêm đơn 0đ rác
+                    if orders_count > 0:
+                        return {
+                            "status": "skipped",
+                            "reason": f"Khách hàng {phone_number} đã từng có {orders_count} đơn hàng trên hệ thống.",
+                            "phone": phone_number,
+                            "orders_count": orders_count
+                        }
+        except Exception as e:
+            # Nếu có lỗi khi search customer thì vẫn tiếp tục tiến trình phía dưới
+            pass
+
+        # 4. Nếu là Khách MỚI (chưa có đơn nào) -> Gọi API Haravan tạo đơn 0đ
         payload = {
             "order": {
                 "phone": phone_number,
@@ -42,7 +71,7 @@ async def handle_chat_webhook(request: Request):
                 "send_receipt": False,                  # Tắt gửi ZNS/SMS rác cho khách
                 "send_fulfillment_receipt": False,
                 "tags": "DonAo_0d, Auto_Bot",
-                "note": "Đơn ảo tự động tạo khi khách nhả SĐT từ HaraSocial",
+                "note": "Đơn ảo tự động tạo khi khách MỚI nhả SĐT từ HaraSocial",
                 "line_items": [
                     {
                         "title": "Mua Hàng Shopee Indo",
@@ -57,13 +86,7 @@ async def handle_chat_webhook(request: Request):
             }
         }
         
-        headers = {
-            "Authorization": f"Bearer {HARAVAN_ACCESS_TOKEN}",
-            "Content-Type": "application/json"
-        }
-        
-        # 4. Gọi API Haravan
-        response = requests.post(HARAVAN_API_URL, json=payload, headers=headers)
+        response = requests.post(HARAVAN_API_URL, json=payload, headers=headers, timeout=10)
         return {"status": "success", "haravan_res": response.json()}
 
     return {"status": "no_phone_detected"}
